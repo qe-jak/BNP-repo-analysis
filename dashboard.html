@@ -1,0 +1,465 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Cantor BNP Repo Market Data - GC Spread Dashboard</title>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns@3.0.0/dist/chartjs-adapter-date-fns.bundle.min.js"></script>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: #0f1117;
+            color: #e0e0e0;
+            padding: 20px;
+        }
+        h1 {
+            text-align: center;
+            font-size: 1.6rem;
+            margin-bottom: 6px;
+            color: #fff;
+        }
+        .subtitle {
+            text-align: center;
+            color: #888;
+            font-size: 0.85rem;
+            margin-bottom: 24px;
+        }
+        .controls {
+            display: flex;
+            justify-content: center;
+            gap: 12px;
+            margin-bottom: 20px;
+            flex-wrap: wrap;
+        }
+        .controls button {
+            padding: 8px 16px;
+            border: 1px solid #333;
+            background: #1a1d27;
+            color: #ccc;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 0.85rem;
+            transition: all 0.2s;
+        }
+        .controls button:hover { background: #252836; border-color: #555; }
+        .controls button.active { background: #2563eb; border-color: #2563eb; color: #fff; }
+        .grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 20px;
+            max-width: 1400px;
+            margin: 0 auto;
+        }
+        .chart-card {
+            background: #1a1d27;
+            border-radius: 10px;
+            padding: 18px;
+            border: 1px solid #252836;
+        }
+        .chart-card.full-width { grid-column: 1 / -1; }
+        .chart-card h2 {
+            font-size: 0.95rem;
+            margin-bottom: 12px;
+            color: #bbb;
+            font-weight: 500;
+        }
+        .chart-container { position: relative; height: 320px; }
+        .chart-container.tall { height: 400px; }
+        .stats-row {
+            display: grid;
+            grid-template-columns: repeat(4, 1fr);
+            gap: 12px;
+            max-width: 1400px;
+            margin: 0 auto 20px;
+        }
+        .stat-card {
+            background: #1a1d27;
+            border-radius: 10px;
+            padding: 16px;
+            border: 1px solid #252836;
+            text-align: center;
+        }
+        .stat-card .label { font-size: 0.75rem; color: #888; margin-bottom: 4px; }
+        .stat-card .value { font-size: 1.4rem; font-weight: 700; color: #fff; }
+        .stat-card .change { font-size: 0.8rem; margin-top: 4px; }
+        .stat-card .change.up { color: #22c55e; }
+        .stat-card .change.down { color: #ef4444; }
+        @media (max-width: 900px) {
+            .grid { grid-template-columns: 1fr; }
+            .stats-row { grid-template-columns: repeat(2, 1fr); }
+        }
+    </style>
+</head>
+<body>
+
+<h1>Cantor BNP Repo Market Data</h1>
+<p class="subtitle">GC Spread Time Series &mdash; Average of Avg up to 7am</p>
+
+<div class="stats-row" id="statsRow"></div>
+
+<div class="controls" id="tenorControls"></div>
+
+<div class="grid">
+    <div class="chart-card full-width">
+        <h2>GC Rate vs Tenor Rates Over Time</h2>
+        <div class="chart-container tall"><canvas id="mainChart"></canvas></div>
+    </div>
+    <div class="chart-card">
+        <h2>Spread to GC (bps)</h2>
+        <div class="chart-container"><canvas id="spreadChart"></canvas></div>
+    </div>
+    <div class="chart-card">
+        <h2>5-Day Rolling Volatility (bps)</h2>
+        <div class="chart-container"><canvas id="volChart"></canvas></div>
+    </div>
+    <div class="chart-card">
+        <h2>Rate Curve Snapshot</h2>
+        <div class="chart-container"><canvas id="curveChart"></canvas></div>
+    </div>
+    <div class="chart-card">
+        <h2>Term Comparison: Same-Day vs O vs OO vs OOO (avg)</h2>
+        <div class="chart-container"><canvas id="termChart"></canvas></div>
+    </div>
+</div>
+
+<script>
+// ── Inline CSV Data ──────────────────────────────────────────────────────────
+const csvText = `time,10Y,20Y,2Y,30Y,3Y,5Y,7Y,GC,O10Y,O20Y,O2Y,O30Y,O3Y,O5Y,O7Y,OO10Y,OO20Y,OO2Y,OO30Y,OO3Y,OO5Y,OO7Y,OOO10Y,OOO20Y,OOO2Y,OOO30Y,OOO3Y,OOO5Y,OOO7Y
+2025-10-01,4.12,4.11,4.22,4.18,4.19,4.18,4.2,4.23,4.21,4.19,4.2,4.15,4.17,4.17,4.2,,,,,,,,,,,,,,
+2025-10-02,3.99,4.14,4.23,4.17,4.17,4.19,4.22,4.23,4.23,4.22,4.21,4.15,4.19,4.19,4.22,,,,,,,,,,,,,,
+2025-10-03,3.98,4.12,4.22,4.15,4.15,4.17,4.21,4.23,4.22,4.22,4.21,4.14,4.19,4.18,4.2,,,,,,,,,,,,,,
+2025-10-06,3.96,4.12,4.18,4.08,4.12,4.13,4.17,4.19,4.18,4.18,4.19,4.11,4.17,4.15,4.17,4.18,4.17,4.13,4.15,4.18,4.16,4.18,4.18,4.18,4.18,4.15,4.18,4.17,4.19
+2025-10-07,3.99,4.1,4.17,4.08,4.13,4.11,4.16,4.18,4.17,4.17,4.18,4.1,4.16,4.14,4.16,4.17,4.16,4.13,4.14,4.16,4.15,4.17,4.18,4.17,4.17,4.15,4.16,4.16,4.18
+2025-10-08,3.99,4.02,4.14,4.05,4.1,4.09,4.14,4.15,4.14,4.14,4.14,4.08,4.12,4.11,4.13,4.14,4.13,4.1,4.12,4.14,4.14,4.14,4.16,4.14,4.14,4.13,4.14,4.14,4.15
+2025-10-09,3.98,4.03,4.14,4.09,4.11,4.1,4.15,4.16,4.16,4.15,4.15,4.1,4.13,4.14,4.14,4.16,4.15,4.12,4.12,4.16,4.15,4.15,4.17,4.16,4.16,4.14,4.16,4.15,4.17
+2025-10-10,3.89,4.07,4.17,4.11,4.15,4.12,4.18,4.19,4.17,4.17,4.18,4.13,4.15,4.13,4.17,4.17,4.17,4.14,4.15,4.19,4.17,4.18,4.18,4.18,4.19,4.16,4.19,4.16,4.18
+2025-10-14,3.93,4.11,4.22,4.15,4.2,4.09,4.22,4.24,4.23,4.24,4.23,4.16,4.21,4.18,4.21,4.22,4.21,4.17,4.19,4.25,4.21,4.23,4.23,4.22,4.22,4.2,4.24,4.21,4.24
+2025-10-15,4.28,4.13,4.31,4.31,4.31,4.07,4.32,4.34,4.33,4.31,4.31,4.26,4.31,4.29,4.3,4.33,4.3,4.26,4.26,4.33,4.31,4.32,4.34,4.34,4.33,4.29,4.32,4.3,4.32
+2025-10-16,4.28,3.89,4.33,4.34,4.33,4.06,4.34,4.35,4.34,4.33,4.34,4.28,4.33,4.31,4.32,4.35,4.31,4.26,4.29,4.31,4.33,4.33,4.34,4.35,4.35,4.31,4.35,4.32,4.33
+2025-10-17,4.17,3.99,4.2,4.2,4.2,3.8,4.2,4.22,4.19,4.21,4.21,4.15,4.2,4.19,4.21,4.2,4.17,4.17,4.17,4.18,4.2,4.2,4.18,4.21,4.21,4.2,4.21,4.18,4.22
+2025-10-20,4.16,4.05,4.17,4.18,4.16,3.79,4.17,4.19,4.17,4.17,4.19,4.12,4.18,4.16,4.17,4.17,4.16,4.15,4.14,4.15,4.17,4.18,4.17,4.16,4.18,4.17,4.18,4.16,4.18
+2025-10-21,4.24,4.12,4.25,4.27,4.24,3.88,4.26,4.28,4.26,4.26,4.26,4.2,4.26,4.24,4.24,,,,,,,,,,,,,,
+2025-10-22,4.22,4.14,4.22,4.24,4.22,3.84,4.23,4.24,4.23,4.24,4.23,4.18,4.23,4.21,4.22,4.23,4.22,4.17,4.2,4.21,4.21,4.23,4.23,4.23,4.24,4.22,4.23,4.22,4.23
+2025-10-23,4.26,4.17,4.25,4.27,4.27,3.87,4.27,4.28,4.26,4.28,4.27,4.21,4.27,4.26,4.26,4.27,4.27,4.2,4.24,4.25,4.25,4.28,4.27,4.28,4.27,4.26,4.28,4.24,4.26
+2025-10-24,4.25,4.14,4.23,4.25,4.25,3.87,4.26,4.27,4.25,4.26,4.26,4.21,4.27,4.25,4.24,,,,,,,,,,,,,,
+2025-10-27,4.29,4.18,4.27,4.31,4.31,3.84,4.3,4.32,4.3,4.31,4.32,4.26,4.29,4.29,4.3,4.31,4.31,4.26,4.28,4.32,4.3,4.31,4.31,4.36,4.32,4.29,4.32,4.3,4.3
+2025-10-28,4.32,4.21,4.31,4.34,4.34,3.8,4.33,4.37,4.34,4.35,4.35,4.28,4.35,4.33,4.32,4.36,4.33,4.28,4.32,4.33,4.34,4.35,4.36,4.4,4.36,4.32,4.35,4.34,4.35
+2025-10-29,4.26,4.15,4.26,4.29,4.28,4.01,4.29,4.32,4.29,4.3,4.3,4.24,4.3,4.29,4.29,4.3,4.29,4.23,4.27,4.28,4.29,4.29,4.3,4.3,4.31,4.29,4.3,4.27,4.29
+2025-10-30,4,3.79,3.99,4.03,4.01,3.92,4.04,4.08,4.04,4.06,4.05,3.99,4.06,4.01,4.04,4.05,4.05,3.98,4.02,4.04,4.03,4.06,4.06,4.04,4.07,4.04,4.05,4.03,4.06
+2025-10-31,4.2,4.13,4.26,4.23,4.19,4.23,4.26,4.3,4.25,4.23,4.19,4.16,4.25,4.12,4.24,4.26,4.2,4.24,4.21,4.2,4.21,4.25,4.24,4.25,4.14,4.22,4.27,4.22,4.25
+2025-11-03,4.07,4.09,4.16,4.13,4.08,4.13,4.16,4.17,4.15,4.15,4.12,4.08,4.16,4.02,4.16,4.16,4.14,4.15,4.12,4.12,4.12,4.16,4.15,4.17,4.07,4.15,4.15,4.16,4.16
+2025-11-04,3.96,3.98,4.04,4.02,3.96,3.99,4.04,4.05,4.03,4.02,4.02,3.97,4.04,3.96,4.04,4.04,4.02,4.04,4.01,4.03,4.01,4.03,4.03,4.02,3.99,4.01,4.04,4.03,4.05
+2025-11-05,3.89,3.87,3.94,3.93,3.87,3.9,3.94,3.96,3.93,3.94,3.93,3.88,3.95,3.89,3.94,3.95,3.93,3.95,3.92,3.93,3.93,3.93,3.94,3.92,3.89,3.93,3.95,3.94,3.94
+2025-11-06,3.88,3.9,3.95,3.93,3.86,3.89,3.95,3.97,3.96,3.96,3.94,3.9,3.96,3.92,3.95,3.96,3.93,3.95,3.93,3.94,3.94,3.93,3.96,3.95,3.91,3.94,3.96,3.94,3.95
+2025-11-07,3.86,3.9,3.95,3.92,3.86,3.88,3.95,3.97,3.95,3.95,3.95,3.9,3.96,3.92,3.95,3.96,3.93,3.95,3.94,3.93,3.93,3.95,3.95,3.95,3.91,3.95,3.96,3.94,3.95
+2025-11-10,3.86,3.91,3.99,3.95,3.9,3.83,3.99,4.01,4,3.98,3.99,3.94,4.01,3.96,3.99,4,3.97,3.99,3.96,3.97,3.96,3.98,4,4.01,3.96,3.97,4.01,3.94,4
+2025-11-12,3.86,3.93,4.02,3.97,3.94,3.84,4.02,4.05,4.02,4.01,4.01,3.96,4.02,4,4.02,4.03,4,4.03,3.99,4,4,4,4.02,4.01,3.99,4.01,4.02,4.01,4.03
+2025-11-13,3.86,3.95,4.04,3.99,3.98,3.83,4.05,4.05,4.04,4.04,4.04,3.99,4.05,4.02,4.05,4.04,4.02,4.04,4.02,4.01,4.03,4.02,4.05,4.05,4.02,4.02,4.04,4.04,4.04
+2025-11-14,3.85,3.92,3.98,3.97,3.95,3.79,3.98,3.99,3.98,3.98,3.98,3.94,3.99,3.97,3.98,3.98,3.96,3.98,3.96,3.96,3.97,3.97,3.98,3.98,3.97,3.95,3.98,3.98,3.98
+2025-11-17,4,3.94,4.02,4.01,4.03,3.62,4.02,4.03,3.96,4.01,4.01,4,4,4.01,4.02,4.02,4,4.03,3.98,4.03,4.01,4,4.03,4.01,4.01,4,4,4.02,4.03
+2025-11-18,3.95,3.87,3.94,3.95,3.96,3.54,3.95,3.97,3.9,3.96,3.95,3.91,3.94,3.93,3.96,3.94,3.94,3.95,3.94,3.97,3.95,3.95,3.95,3.94,3.95,3.93,3.95,3.95,3.95
+2025-11-19,3.91,3.86,3.91,3.92,3.93,3.54,3.91,3.94,3.88,3.92,3.92,3.89,3.91,3.91,3.93,3.93,3.91,3.93,3.92,3.93,3.93,3.91,3.93,3.92,3.92,3.91,3.92,3.93,3.92
+2025-11-20,3.92,3.85,3.91,3.92,3.93,3.62,3.92,3.94,3.89,3.92,3.92,3.89,3.9,3.92,3.92,3.91,3.93,3.92,3.92,3.93,3.9,3.91,3.92,3.91,3.92,3.91,3.9,3.91,3.93
+2025-11-21,3.94,3.89,3.93,3.95,3.96,3.66,3.95,3.96,3.93,3.96,3.96,3.9,3.93,3.95,3.96,3.95,3.95,3.96,3.95,3.97,3.96,3.95,3.96,3.95,3.95,3.94,3.94,3.96,3.96
+2025-11-24,3.98,3.92,3.96,3.98,3.97,3.49,3.97,4,3.94,3.99,3.98,3.92,3.97,3.98,3.99,3.98,3.95,3.98,3.98,4,3.97,3.98,3.98,3.99,3.97,3.97,3.97,3.99,3.99
+2025-11-25,4.03,3.98,4,4.02,4.02,3.68,4.02,4.05,3.98,4.04,4.03,3.98,4.02,4.03,4.03,4.03,4.02,4.03,4.03,4.03,4.01,4.03,4.03,4.03,4,4.01,4.02,4.03,4.03
+2025-11-26,4.08,4.03,4.06,4.06,4.08,3.89,4.02,4.1,4.05,4.08,4.08,4.03,4.07,4.06,4.08,4.09,4.08,4.08,4.07,4.09,4.05,4.08,4.08,4.1,4.05,4.06,4.08,4.08,4.09
+2025-11-28,4.1,4.1,4.11,4.09,4.14,3.84,4,4.18,4.11,4.14,4.15,4.07,4.14,4.14,4.15,4.15,4.14,4.15,4.14,4.16,4.1,4.14,,,,,,,
+2025-12-01,4.02,3.96,4.13,4.02,4.09,4.14,4.13,4.15,4.09,4.1,4.09,4.03,4.11,3.82,4.02,4.14,4.13,4.14,4.11,4.14,4.11,4.14,4.14,4.14,4.13,4.09,4.12,4.09,4.14
+2025-12-02,3.84,3.69,4.02,3.95,3.96,4.02,4.02,4.04,3.96,3.97,4.01,3.94,4.01,3.8,3.97,4.01,4.01,4.03,4.01,4.04,4.01,4.03,4.02,4.01,4.01,3.98,4.01,3.99,4.03
+2025-12-03,3.49,3.44,3.96,3.89,3.91,3.96,3.96,3.97,3.92,3.9,3.95,3.87,3.94,3.9,3.94,3.95,3.95,3.96,3.95,3.97,3.96,3.96,3.96,3.95,3.95,3.92,3.96,3.94,3.96
+2025-12-04,3.61,3.62,3.93,3.86,3.9,3.92,3.93,3.95,3.9,3.89,3.92,3.85,3.91,3.92,3.92,3.93,3.92,3.93,3.93,3.94,3.93,3.93,3.94,3.91,3.92,3.9,3.93,3.91,3.93
+2025-12-05,3.76,3.81,3.96,3.88,3.93,3.94,3.96,3.97,3.94,3.92,3.95,3.86,3.94,3.94,3.96,3.96,3.95,3.96,3.94,3.97,3.95,3.96,3.95,3.94,3.95,3.93,3.95,3.93,3.97
+2025-12-08,3.6,3.97,3.98,3.85,3.96,3.96,3.98,4,3.96,3.97,3.99,3.88,3.99,3.99,3.98,3.98,3.97,3.99,3.98,4,3.97,3.99,3.98,3.99,3.97,3.96,3.98,3.98,3.99
+2025-12-09,1.96,3.94,3.95,3.67,3.92,3.95,3.95,3.97,3.93,3.94,3.97,3.85,3.95,3.96,3.95,3.96,3.95,3.97,3.94,3.97,3.92,3.96,3.96,3.95,3.96,3.93,3.95,3.95,3.97
+2025-12-10,0.65,3.89,3.93,3.55,3.9,3.91,3.93,3.94,3.91,3.92,3.93,3.81,3.92,3.93,3.93,3.93,3.93,3.93,3.92,3.94,3.89,3.92,3.94,3.94,3.92,3.91,3.93,3.93,3.93
+2025-12-11,-0.72,3.64,3.67,3.3,3.65,3.65,3.68,3.69,3.64,3.67,3.68,3.55,3.67,3.68,3.68,3.68,3.68,3.68,3.67,3.69,3.59,3.68,3.68,3.67,3.66,3.65,3.66,3.68,3.68
+2025-12-12,-0.8,3.66,3.7,3.45,3.67,3.66,3.71,3.73,3.66,3.69,3.71,3.58,3.71,3.69,3.7,3.71,3.69,3.7,3.69,3.72,3.65,3.71,3.7,3.66,3.69,3.67,3.68,3.7,3.71
+2025-12-15,3.74,3.24,3.77,3.78,3.79,3.72,3.79,3.81,3.74,3.75,3.78,3.68,3.77,3.73,3.78,3.79,3.78,3.8,3.79,3.79,3.78,3.79,3.79,3.78,3.79,3.76,3.79,3.72,3.8
+2025-12-16,3.66,2.46,3.68,3.69,3.7,3.62,3.7,3.72,3.67,3.66,3.7,3.62,3.68,3.64,3.7,3.7,3.7,3.7,3.69,3.7,3.69,3.7,3.7,3.68,3.7,3.67,3.71,3.65,3.71
+2025-12-17,3.68,1.74,3.71,3.71,3.72,3.62,3.72,3.73,3.7,3.68,3.72,3.65,3.71,3.65,3.72,3.72,3.71,3.72,3.72,3.73,3.71,3.73,3.72,3.69,3.73,3.7,3.73,3.69,3.73
+2025-12-18,3.65,2.76,3.65,3.68,3.68,3.55,3.68,3.7,3.66,3.64,3.69,3.64,3.68,3.62,3.67,3.68,3.68,3.69,3.68,3.69,3.69,3.69,3.69,3.66,3.68,3.67,3.69,3.67,3.69
+2025-12-19,3.64,3.39,3.63,3.67,3.68,3.55,3.68,3.7,3.66,3.64,3.68,3.63,3.68,3.62,3.68,3.68,3.66,3.69,3.67,3.69,3.68,3.69,3.69,3.66,3.67,3.67,3.68,3.68,3.69
+2025-12-22,3.66,3.37,3.66,3.71,3.7,3.57,3.7,3.72,3.69,3.67,3.7,3.64,3.7,3.64,3.7,3.71,3.69,3.71,3.71,3.71,3.71,3.71,3.71,3.69,3.7,3.69,3.71,3.7,3.7
+2025-12-23,3.63,3.39,3.65,3.68,3.68,3.56,3.68,3.7,3.66,3.65,3.69,3.64,3.68,3.64,3.67,3.69,3.68,3.69,3.68,3.69,3.69,3.69,3.69,3.67,3.69,3.66,3.69,3.67,3.7
+2025-12-24,3.63,3.35,3.65,3.67,3.67,3.56,3.68,3.71,3.67,3.65,3.69,3.64,3.68,3.66,3.69,3.69,3.69,3.69,3.68,3.69,3.68,3.69,3.7,3.67,3.69,3.68,3.7,3.67,3.7
+2025-12-26,3.72,3.17,3.79,3.8,3.79,3.67,3.79,3.82,3.78,3.75,3.81,3.73,3.8,3.76,3.79,3.8,3.8,3.81,3.79,3.81,3.8,3.81,3.81,3.76,3.81,3.77,3.82,3.79,3.81
+2025-12-29,3.7,2.54,3.8,3.8,3.8,3.67,3.8,3.85,3.79,3.77,3.82,3.71,3.79,3.77,3.82,3.8,3.81,3.82,3.78,3.83,3.82,3.81,3.82,3.79,3.8,3.79,3.83,3.78,3.8
+2025-12-30,3.61,2.43,3.73,3.74,3.73,3.65,3.72,3.77,3.71,3.71,3.75,3.62,3.72,3.71,3.73,3.75,3.76,3.76,3.73,3.75,3.74,3.71,3.75,3.73,3.73,3.71,3.75,3.73,3.75
+2025-12-31,3.7,3.82,3.89,3.76,3.87,3.8,3.89,3.93,3.85,3.87,3.9,3.72,3.87,3.82,3.9,3.92,3.91,3.92,3.88,3.88,3.9,3.91,3.92,3.91,3.89,3.89,3.91,3.88,3.92
+2026-01-02,3.6,3.71,3.75,3.67,3.71,3.71,3.75,3.79,3.73,3.71,3.76,3.64,3.76,3.68,3.76,3.8,3.76,3.79,3.75,3.75,3.76,3.77,3.77,3.73,3.75,3.74,3.77,3.74,3.79
+2026-01-05,3.57,3.67,3.71,3.63,3.66,3.69,3.72,3.73,3.7,3.69,3.72,3.61,3.71,3.65,3.73,3.73,3.71,3.73,3.72,3.71,3.72,3.73,3.72,3.69,3.72,3.7,3.73,3.71,3.73
+2026-01-07,3.58,3.61,3.68,3.63,3.58,3.67,3.68,3.7,3.66,3.64,3.68,3.61,3.67,3.65,3.68,3.68,3.67,3.69,3.67,3.68,3.67,3.69,3.68,3.65,3.67,3.65,3.69,3.66,3.69
+2026-01-08,3.58,3.61,3.67,3.63,3.55,3.67,3.67,3.68,3.65,3.64,3.66,3.61,3.67,3.64,3.67,3.66,3.65,3.67,3.66,3.66,3.67,3.67,3.66,3.64,3.67,3.64,3.67,3.64,3.67
+2026-01-12,3.5,3.61,3.68,3.6,3.54,3.68,3.68,3.69,3.67,3.65,3.68,3.63,3.67,3.64,3.68,3.68,3.67,3.68,3.68,3.68,3.68,3.69,3.68,3.67,3.68,3.66,3.69,3.65,3.69
+2026-01-13,3.25,3.6,3.69,3.62,3.56,3.69,3.69,3.7,3.68,3.66,3.68,3.64,3.68,3.65,3.69,3.68,3.68,3.69,3.67,3.68,3.69,3.69,3.69,3.67,3.69,3.65,3.7,3.65,3.7
+2026-01-14,3.4,3.6,3.67,3.61,3.59,3.66,3.67,3.68,3.66,3.65,3.66,3.63,3.67,3.65,3.67,3.67,3.66,3.67,3.66,3.68,3.67,3.67,3.68,3.66,3.67,3.64,3.67,3.63,3.68
+2026-01-15,3.68,3.61,3.65,3.69,3.69,3.62,3.69,3.7,3.67,3.67,3.69,3.65,3.64,3.68,3.68,3.68,3.69,3.68,3.68,3.69,3.67,3.69,3.69,3.68,3.69,3.65,3.69,3.69,3.69
+2026-01-16,3.67,3.56,3.63,3.67,3.67,3.56,3.67,3.68,3.66,3.66,3.67,3.64,3.63,3.67,3.69,3.66,3.67,3.67,3.67,3.68,3.66,3.69,3.68,3.65,3.67,3.65,3.68,3.68,3.68`;
+
+// ── Parse CSV ────────────────────────────────────────────────────────────────
+function parseCSV(text) {
+    const lines = text.trim().split('\n');
+    const headers = lines[0].split(',');
+    const data = [];
+    for (let i = 1; i < lines.length; i++) {
+        const vals = lines[i].split(',');
+        const row = {};
+        headers.forEach((h, j) => {
+            if (h === 'time') row[h] = vals[j];
+            else {
+                const v = parseFloat(vals[j]);
+                row[h] = isNaN(v) ? null : v;
+            }
+        });
+        data.push(row);
+    }
+    return { headers, data };
+}
+
+const { headers, data } = parseCSV(csvText);
+const dates = data.map(d => d.time);
+const baseTenors = ['2Y','3Y','5Y','7Y','10Y','20Y','30Y'];
+const tenorColors = {
+    '2Y': '#3b82f6', '3Y': '#f59e0b', '5Y': '#22c55e', '7Y': '#ef4444',
+    '10Y': '#a855f7', '20Y': '#78716c', '30Y': '#ec4899', 'GC': '#ffffff'
+};
+
+// ── Stats Cards ──────────────────────────────────────────────────────────────
+function renderStats() {
+    const last = data[data.length - 1];
+    const prev = data[data.length - 2];
+    const first = data[0];
+
+    const gcLast = last.GC;
+    const gcPrev = prev ? prev.GC : gcLast;
+    const gcFirst = first.GC;
+    const gcChange1d = ((gcLast - gcPrev) * 100).toFixed(1);
+    const gcChangeTot = ((gcLast - gcFirst) * 100).toFixed(1);
+
+    // Average spread
+    let spreads = baseTenors.map(t => last[t] != null && gcLast != null ? (last[t] - gcLast) * 100 : null).filter(v => v !== null);
+    const avgSpread = spreads.length ? (spreads.reduce((a,b) => a+b, 0) / spreads.length).toFixed(1) : 'N/A';
+
+    const stats = [
+        { label: 'GC Rate (Latest)', value: gcLast != null ? gcLast.toFixed(2) + '%' : 'N/A', change: gcChange1d + ' bps 1d', up: parseFloat(gcChange1d) >= 0 },
+        { label: 'GC Change (Period)', value: gcChangeTot + ' bps', change: `${first.time} → ${last.time}`, up: parseFloat(gcChangeTot) >= 0 },
+        { label: 'Avg Spread to GC', value: avgSpread + ' bps', change: 'Across all tenors', up: parseFloat(avgSpread) <= 0 },
+        { label: 'Data Points', value: data.length, change: `${first.time} to ${last.time}`, up: true },
+    ];
+
+    const row = document.getElementById('statsRow');
+    row.innerHTML = stats.map(s => `
+        <div class="stat-card">
+            <div class="label">${s.label}</div>
+            <div class="value">${s.value}</div>
+            <div class="change ${s.up ? 'up' : 'down'}">${s.change}</div>
+        </div>
+    `).join('');
+}
+
+// ── Tenor Toggle Buttons ─────────────────────────────────────────────────────
+let activeTenors = new Set(['2Y','3Y','5Y','7Y','10Y','20Y','30Y']);
+
+function renderControls() {
+    const container = document.getElementById('tenorControls');
+    const allBtn = `<button id="btnAll" class="active" onclick="toggleAll()">All Tenors</button>`;
+    const tenorBtns = baseTenors.map(t =>
+        `<button id="btn${t}" class="active" style="border-left: 3px solid ${tenorColors[t]}" onclick="toggleTenor('${t}')">${t}</button>`
+    ).join('');
+    container.innerHTML = allBtn + tenorBtns;
+}
+
+function toggleTenor(t) {
+    if (activeTenors.has(t)) activeTenors.delete(t); else activeTenors.add(t);
+    updateButtons();
+    updateCharts();
+}
+
+function toggleAll() {
+    if (activeTenors.size === baseTenors.length) activeTenors.clear();
+    else baseTenors.forEach(t => activeTenors.add(t));
+    updateButtons();
+    updateCharts();
+}
+
+function updateButtons() {
+    baseTenors.forEach(t => {
+        document.getElementById('btn' + t).classList.toggle('active', activeTenors.has(t));
+    });
+    document.getElementById('btnAll').classList.toggle('active', activeTenors.size === baseTenors.length);
+}
+
+// ── Chart Instances ──────────────────────────────────────────────────────────
+const chartDefaults = {
+    responsive: true, maintainAspectRatio: false,
+    plugins: { legend: { labels: { color: '#aaa', boxWidth: 12, font: { size: 11 } } } },
+    scales: {
+        x: { type: 'time', time: { unit: 'week', tooltipFormat: 'MMM dd, yyyy' }, ticks: { color: '#666', maxRotation: 45 }, grid: { color: '#1e2130' } },
+        y: { ticks: { color: '#888' }, grid: { color: '#1e2130' } }
+    }
+};
+
+let mainChart, spreadChart, volChart, curveChart, termChart;
+
+function buildDatasets(cols, valueFn, colorFn) {
+    return cols.filter(c => activeTenors.has(c.replace(/^O+/,''))).map(c => ({
+        label: c,
+        data: data.map(d => ({ x: d.time, y: valueFn(d, c) })).filter(p => p.y !== null),
+        borderColor: colorFn(c),
+        backgroundColor: colorFn(c) + '22',
+        borderWidth: 1.5,
+        pointRadius: 0,
+        tension: 0.3,
+    }));
+}
+
+function initCharts() {
+    // Main chart
+    const mainDs = [
+        { label: 'GC', data: data.map(d => ({ x: d.time, y: d.GC })).filter(p => p.y !== null),
+          borderColor: '#fff', borderWidth: 2.5, pointRadius: 0, tension: 0.3 },
+        ...buildDatasets(baseTenors, (d, c) => d[c], c => tenorColors[c])
+    ];
+    mainChart = new Chart(document.getElementById('mainChart'), {
+        type: 'line', data: { datasets: mainDs },
+        options: { ...chartDefaults, scales: { ...chartDefaults.scales, y: { ...chartDefaults.scales.y, title: { display: true, text: 'Rate (%)', color: '#888' } } } }
+    });
+
+    // Spread chart
+    spreadChart = new Chart(document.getElementById('spreadChart'), {
+        type: 'line',
+        data: { datasets: buildDatasets(baseTenors, (d, c) => d[c] != null && d.GC != null ? (d[c] - d.GC) * 100 : null, c => tenorColors[c]) },
+        options: {
+            ...chartDefaults,
+            scales: { ...chartDefaults.scales, y: { ...chartDefaults.scales.y, title: { display: true, text: 'Spread (bps)', color: '#888' } } },
+            plugins: { ...chartDefaults.plugins, annotation: {} }
+        }
+    });
+
+    // Volatility chart
+    function rollingStd(arr, w) {
+        const result = [];
+        for (let i = 0; i < arr.length; i++) {
+            if (i < w - 1) { result.push(null); continue; }
+            const window = arr.slice(i - w + 1, i + 1).filter(v => v !== null);
+            if (window.length < w) { result.push(null); continue; }
+            const mean = window.reduce((a, b) => a + b, 0) / window.length;
+            const variance = window.reduce((a, b) => a + (b - mean) ** 2, 0) / window.length;
+            result.push(Math.sqrt(variance) * 100);
+        }
+        return result;
+    }
+
+    const volDatasets = baseTenors.filter(t => activeTenors.has(t)).map(t => {
+        const vals = data.map(d => d[t]);
+        const stds = rollingStd(vals, 5);
+        return {
+            label: t, data: stds.map((v, i) => ({ x: data[i].time, y: v })).filter(p => p.y !== null),
+            borderColor: tenorColors[t], borderWidth: 1.5, pointRadius: 0, tension: 0.3,
+        };
+    });
+    const gcStds = rollingStd(data.map(d => d.GC), 5);
+    volDatasets.unshift({
+        label: 'GC', data: gcStds.map((v, i) => ({ x: data[i].time, y: v })).filter(p => p.y !== null),
+        borderColor: '#fff', borderWidth: 2, pointRadius: 0, tension: 0.3,
+    });
+    volChart = new Chart(document.getElementById('volChart'), {
+        type: 'line', data: { datasets: volDatasets },
+        options: { ...chartDefaults, scales: { ...chartDefaults.scales, y: { ...chartDefaults.scales.y, title: { display: true, text: 'Volatility (bps)', color: '#888' } } } }
+    });
+
+    // Curve snapshot chart
+    const snapIndices = [0, Math.floor(data.length * 0.25), Math.floor(data.length * 0.5), Math.floor(data.length * 0.75), data.length - 1];
+    const snapColors = ['#3b82f6', '#22c55e', '#f59e0b', '#ef4444', '#a855f7'];
+    const curveDs = snapIndices.map((idx, i) => ({
+        label: data[idx].time,
+        data: baseTenors.map(t => data[idx][t]),
+        borderColor: snapColors[i], backgroundColor: snapColors[i] + '33',
+        borderWidth: 2, pointRadius: 4, tension: 0.3,
+    }));
+    curveChart = new Chart(document.getElementById('curveChart'), {
+        type: 'line', data: { labels: baseTenors, datasets: curveDs },
+        options: {
+            responsive: true, maintainAspectRatio: false,
+            plugins: { legend: { labels: { color: '#aaa', boxWidth: 12, font: { size: 10 } } } },
+            scales: {
+                x: { ticks: { color: '#888' }, grid: { color: '#1e2130' } },
+                y: { ticks: { color: '#888' }, grid: { color: '#1e2130' }, title: { display: true, text: 'Rate (%)', color: '#888' } }
+            }
+        }
+    });
+
+    // Term comparison chart (avg of each group)
+    const termGroups = {
+        'Same-Day': baseTenors,
+        'O (Overnight)': baseTenors.map(t => 'O' + t),
+        'OO (2-Day)': baseTenors.map(t => 'OO' + t),
+        'OOO (3-Day)': baseTenors.map(t => 'OOO' + t),
+    };
+    const termColors = ['#3b82f6', '#22c55e', '#f59e0b', '#ef4444'];
+    const termDs = Object.entries(termGroups).map(([name, cols], i) => ({
+        label: name,
+        data: data.map(d => {
+            const vals = cols.map(c => d[c]).filter(v => v !== null);
+            return { x: d.time, y: vals.length ? vals.reduce((a, b) => a + b, 0) / vals.length : null };
+        }).filter(p => p.y !== null),
+        borderColor: termColors[i], borderWidth: 1.8, pointRadius: 0, tension: 0.3,
+    }));
+    termDs.unshift({
+        label: 'GC', data: data.map(d => ({ x: d.time, y: d.GC })).filter(p => p.y !== null),
+        borderColor: '#fff', borderWidth: 2, borderDash: [5, 3], pointRadius: 0, tension: 0.3,
+    });
+    termChart = new Chart(document.getElementById('termChart'), {
+        type: 'line', data: { datasets: termDs },
+        options: { ...chartDefaults, scales: { ...chartDefaults.scales, y: { ...chartDefaults.scales.y, title: { display: true, text: 'Avg Rate (%)', color: '#888' } } } }
+    });
+}
+
+function updateCharts() {
+    // Main
+    mainChart.data.datasets = [
+        mainChart.data.datasets[0], // GC stays
+        ...buildDatasets(baseTenors, (d, c) => d[c], c => tenorColors[c])
+    ];
+    mainChart.update();
+
+    // Spread
+    spreadChart.data.datasets = buildDatasets(baseTenors, (d, c) => d[c] != null && d.GC != null ? (d[c] - d.GC) * 100 : null, c => tenorColors[c]);
+    spreadChart.update();
+
+    // Vol - rebuild
+    function rollingStd(arr, w) {
+        const result = [];
+        for (let i = 0; i < arr.length; i++) {
+            if (i < w - 1) { result.push(null); continue; }
+            const window = arr.slice(i - w + 1, i + 1).filter(v => v !== null);
+            if (window.length < w) { result.push(null); continue; }
+            const mean = window.reduce((a, b) => a + b, 0) / window.length;
+            const variance = window.reduce((a, b) => a + (b - mean) ** 2, 0) / window.length;
+            result.push(Math.sqrt(variance) * 100);
+        }
+        return result;
+    }
+    const volDs = baseTenors.filter(t => activeTenors.has(t)).map(t => {
+        const vals = data.map(d => d[t]);
+        const stds = rollingStd(vals, 5);
+        return { label: t, data: stds.map((v, i) => ({ x: data[i].time, y: v })).filter(p => p.y !== null),
+            borderColor: tenorColors[t], borderWidth: 1.5, pointRadius: 0, tension: 0.3 };
+    });
+    const gcStds = rollingStd(data.map(d => d.GC), 5);
+    volDs.unshift({ label: 'GC', data: gcStds.map((v, i) => ({ x: data[i].time, y: v })).filter(p => p.y !== null),
+        borderColor: '#fff', borderWidth: 2, pointRadius: 0, tension: 0.3 });
+    volChart.data.datasets = volDs;
+    volChart.update();
+}
+
+// ── Init ─────────────────────────────────────────────────────────────────────
+renderStats();
+renderControls();
+initCharts();
+</script>
+</body>
+</html>
